@@ -1378,12 +1378,16 @@ class PageView(GSignalEmitterMixin, Gtk.VBox):
 			if label.lower() == default:
 				continue # Covered by default Copy action
 
-			format = zim.formats.canonical_name(label)
+			flavor = zim.formats.get_markdown_export_flavor(label)
+			if flavor:
+				fmt = 'markdown:' + flavor  # compound string preserves flavor
+			else:
+				fmt = zim.formats.canonical_name(label)
 			item = Gtk.MenuItem.new_with_mnemonic(label)
 			if buffer.get_has_selection():
 				item.connect('activate',
 					lambda o, f: self.textview.do_copy_clipboard(format=f),
-					format)
+					fmt)
 			else:
 				item.set_sensitive(False)
 			copy_as_menu.append(item)

@@ -314,7 +314,7 @@ class CustomToolDict(DesktopEntryDict):
 			m = m.group()
 			if m == '%f':
 				self._tmpfile = TmpFile('tmp-page-source.txt')
-				self._tmpfile.writelines(page.dump('wiki'))
+				self._tmpfile.writelines(page.dump(page.format.info['name']))
 				return self._tmpfile.path
 			elif m == '%d':
 				dir = notebook.get_attachments_dir(page)

@@ -1405,6 +1405,424 @@ class StubFile(object):
 		return self.text
 
 
+class TestMarkdownFlavors(tests.TestCase):
+	'''Tests for markdown flavor support: parser, dumper, and lossiness detection.'''
+
+	def _parser(self, flavor):
+		from zim.formats.markdown import Parser
+		return Parser(default_flavor=flavor)
+
+	def _dumper(self, flavor):
+		from zim.formats.markdown import Dumper
+		return Dumper(flavor=flavor)
+
+	# ---- flavor_from_format_string / format_string_for_flavor ----
+
+	def testFlavorFromFormatString(self):
+		from zim.formats.markdown import flavor_from_format_string, \
+			FLAVOR_PANDOC, FLAVOR_GFM, FLAVOR_GLFM, FLAVOR_PHP_EXTRA, \
+			FLAVOR_RMARKDOWN, FLAVOR_ORIGINAL
+		# Current format strings
+		self.assertEqual(flavor_from_format_string('markdown pandoc'),    FLAVOR_PANDOC)
+		self.assertEqual(flavor_from_format_string('markdown gfm 0.31.2'), FLAVOR_GFM)
+		self.assertEqual(flavor_from_format_string('markdown glfm'),      FLAVOR_GLFM)
+		self.assertEqual(flavor_from_format_string('markdown php-extra'), FLAVOR_PHP_EXTRA)
+		self.assertEqual(flavor_from_format_string('markdown rmarkdown'), FLAVOR_RMARKDOWN)
+		self.assertEqual(flavor_from_format_string('markdown 1.0'),       FLAVOR_ORIGINAL)
+		self.assertEqual(flavor_from_format_string(''),                   FLAVOR_PANDOC)
+		# GLFM must not be swallowed by the GFM check
+		self.assertNotEqual(flavor_from_format_string('markdown glfm'),   FLAVOR_GFM)
+
+	def testFormatStringForFlavor(self):
+		from zim.formats.markdown import format_string_for_flavor, \
+			FLAVOR_PANDOC, FLAVOR_GFM, FLAVOR_GLFM, FLAVOR_PHP_EXTRA, \
+			FLAVOR_RMARKDOWN, FLAVOR_ORIGINAL
+		self.assertEqual(format_string_for_flavor(FLAVOR_PANDOC),    'markdown pandoc')
+		self.assertEqual(format_string_for_flavor(FLAVOR_GFM),       'markdown gfm 0.31.2')
+		self.assertEqual(format_string_for_flavor(FLAVOR_GLFM),      'markdown glfm')
+		self.assertEqual(format_string_for_flavor(FLAVOR_PHP_EXTRA), 'markdown php-extra')
+		self.assertEqual(format_string_for_flavor(FLAVOR_RMARKDOWN), 'markdown rmarkdown')
+		self.assertEqual(format_string_for_flavor(FLAVOR_ORIGINAL),  'markdown 1.0')
+
+	def testNewFlavorDumperHeaders(self):
+		from zim.formats.markdown import FLAVOR_GLFM, FLAVOR_PHP_EXTRA, FLAVOR_RMARKDOWN
+		for flavor, expected in (
+			(FLAVOR_GLFM,      'Format: markdown glfm\n'),
+			(FLAVOR_PHP_EXTRA, 'Format: markdown php-extra\n'),
+			(FLAVOR_RMARKDOWN, 'Format: markdown rmarkdown\n'),
+		):
+			tree = self._parser('pandoc').parse('Hello\n')
+			out = ''.join(self._dumper(flavor).dump(tree, file_output=True))
+			self.assertIn(expected, out, 'Wrong header for flavor %s' % flavor)
+
+	def testGLFMHasAnchors(self):
+		# GLFM supports {#id} anchors (unlike GFM)
+		from zim.formats.markdown import FLAVOR_GLFM, FLAVOR_GFM
+		text = '# Heading {#my-id}\n'
+		glfm_tree = self._parser(FLAVOR_GLFM).parse(text)
+		self.assertIn('anchor', glfm_tree.tostring())
+		gfm_tree = self._parser(FLAVOR_GFM).parse(text)
+		self.assertNotIn('anchor', gfm_tree.tostring())
+
+	def testGLFMNoSubscript(self):
+		from zim.formats.markdown import FLAVOR_GLFM
+		tree = self._parser('pandoc').parse('H~2~O\n')
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger') as mock_log:
+			out = ''.join(self._dumper(FLAVOR_GLFM).dump(tree))
+		self.assertNotIn('~', out)  # subscript dropped as plain text fallback
+		mock_log.warning.assert_called()
+
+	def testPHPExtraNoTaskLists(self):
+		from zim.formats.markdown import FLAVOR_PHP_EXTRA
+		# PHP Extra parser has task_lists=False, so [ ] is preserved as text
+		tree = self._parser(FLAVOR_PHP_EXTRA).parse('- [ ] todo\n- [x] done\n')
+		xml = tree.tostring()
+		self.assertNotIn('unchecked-box', xml)  # not parsed as checkbox
+		self.assertIn('[ ]', xml)               # bracket text preserved in body
+		# Dumper: checkbox nodes produced by pandoc parser fall back to plain text
+		pandoc_tree = self._parser('pandoc').parse('- [ ] todo\n')
+		self.assertIn('unchecked-box', pandoc_tree.tostring())
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger'):
+			out = ''.join(self._dumper(FLAVOR_PHP_EXTRA).dump(pandoc_tree))
+		self.assertNotIn('[ ]', out)  # checkbox node dropped (no syntax in this flavor)
+
+	def testPHPExtraNoStrikethrough(self):
+		from zim.formats.markdown import FLAVOR_PHP_EXTRA
+		tree = self._parser('pandoc').parse('~~deleted~~\n')
+		self.assertIn('strike', tree.tostring())
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger'):
+			out = ''.join(self._dumper(FLAVOR_PHP_EXTRA).dump(tree))
+		self.assertNotIn('~~', out)
+
+	def testRMarkdownSameAsPandoc(self):
+		# R Markdown inherits all Pandoc flags
+		from zim.formats.markdown import FLAVOR_RMARKDOWN, FLAVOR_CONFIGS
+		cfg = FLAVOR_CONFIGS[FLAVOR_RMARKDOWN]
+		self.assertTrue(cfg.tables)
+		self.assertTrue(cfg.subscript)
+		self.assertTrue(cfg.superscript)
+		self.assertTrue(cfg.mark)
+		self.assertTrue(cfg.anchors)
+
+	def testRMarkdownCodeChunkRoundtrip(self):
+		# {r option=value} code fence must survive a round-trip
+		from zim.formats.markdown import FLAVOR_RMARKDOWN
+		text = '```{r fig.width=8, echo=FALSE}\nx <- 1:10\nmean(x)\n```\n'
+		tree = self._parser(FLAVOR_RMARKDOWN).parse(text)
+		out = ''.join(self._dumper(FLAVOR_RMARKDOWN).dump(tree))
+		self.assertIn('{r fig.width=8, echo=FALSE}', out)
+
+	def testNewFlavorsInFLAVORS(self):
+		from zim.formats.markdown import FLAVORS, FLAVOR_GLFM, FLAVOR_PHP_EXTRA, FLAVOR_RMARKDOWN
+		self.assertIn(FLAVOR_GLFM,      FLAVORS)
+		self.assertIn(FLAVOR_PHP_EXTRA, FLAVORS)
+		self.assertIn(FLAVOR_RMARKDOWN, FLAVORS)
+
+	# ---- Parser flavor detection from YAML header ----
+
+	def testParserAutoDetectFlavor(self):
+		from zim.formats.markdown import FLAVOR_PANDOC, FLAVOR_GFM
+		# File with GFM flavor header: subscript ~sub~ should be plain text
+		text = (
+			'---\n'
+			'Content-Type: text/markdown\n'
+			'Format: markdown 1.0 gfm\n'
+			'---\n'
+			'Hello ~sub~ ^sup^\n'
+		)
+		p = self._parser(FLAVOR_PANDOC)
+		tree = p.parse(text, file_input=True)
+		xml = tree.tostring()
+		# In GFM mode ~sub~ and ^sup^ are NOT parsed as sub/sup
+		self.assertNotIn('<sub>', xml)
+		self.assertNotIn('<sup>', xml)
+		self.assertIn('~sub~', xml)
+		self.assertIn('^sup^', xml)
+
+	def testParserDefaultFlavorUsedWhenNoHeader(self):
+		from zim.formats.markdown import FLAVOR_GFM
+		text = 'Hello ~sub~\n'
+		p = self._parser(FLAVOR_GFM)
+		tree = p.parse(text, file_input=False)
+		xml = tree.tostring()
+		self.assertNotIn('<sub>', xml)
+
+	# ---- GFM parser: disabled extensions ----
+
+	def testGFMParserNoSubscriptSuperscript(self):
+		text = '~sub~ ^sup^\n'
+		tree = self._parser('gfm').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<sub>', xml)
+		self.assertNotIn('<sup>', xml)
+		self.assertIn('~sub~', xml)
+		self.assertIn('^sup^', xml)
+
+	def testGFMParserNoMark(self):
+		text = '__marked__\n'
+		tree = self._parser('gfm').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<mark>', xml)
+
+	def testGFMParserNoAnchors(self):
+		text = 'text {#myanchor}\n'
+		tree = self._parser('gfm').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<anchor', xml)
+
+	def testGFMParserStrikethroughStillWorks(self):
+		text = '~~strike~~\n'
+		tree = self._parser('gfm').parse(text)
+		xml = tree.tostring()
+		self.assertIn('<strike>strike</strike>', xml)
+
+	def testGFMParserTablesStillWork(self):
+		text = '| H1 | H2 |\n|---|---|\n| A | B |\n'
+		tree = self._parser('gfm').parse(text)
+		xml = tree.tostring()
+		self.assertIn('<table', xml)
+
+	# ---- Original flavor parser ----
+
+	def testOriginalParserNoTables(self):
+		text = '| H1 | H2 |\n|---|---|\n| A | B |\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<table', xml)
+
+	def testOriginalParserNoStrikethrough(self):
+		text = '~~strike~~\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<strike>', xml)
+		self.assertIn('~~strike~~', xml)
+
+	def testOriginalParserNoZimTags(self):
+		text = 'Hello @tag\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		self.assertNotIn('<tag', xml)
+		self.assertIn('@tag', xml)
+
+	def testOriginalParserNoFencedCode(self):
+		text = '```python\ncode\n```\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		# Fenced code not parsed as VERBATIM_BLOCK in original flavor
+		self.assertNotIn('<pre', xml)
+
+	def testOriginalParserTaskListTextPreserved(self):
+		# When task_lists=False the "[ ] " / "[x] " marker must NOT be silently
+		# dropped — it should appear as literal text in the list item.
+		text = '- [ ] task 1\n- [x] task 2\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		# Not rendered as checkboxes
+		self.assertNotIn('unchecked-box', xml)
+		self.assertNotIn('xchecked-box', xml)
+		# But the bracket text must survive in the item content
+		self.assertIn('[ ]', xml)
+		self.assertIn('[x]', xml)
+
+	def testOriginalParserIndentedCode(self):
+		text = 'paragraph\n\n    code line 1\n    code line 2\n'
+		tree = self._parser('original').parse(text)
+		xml = tree.tostring()
+		self.assertIn('<pre', xml)
+		self.assertIn('code line 1', xml)
+
+	# ---- Dumper: format header written correctly ----
+
+	def testDumperWritesPandocHeader(self):
+		tree = self._parser('pandoc').parse('Hello\n')
+		out = ''.join(self._dumper('pandoc').dump(tree, file_output=True))
+		self.assertIn('Format: markdown pandoc\n', out)
+
+	def testDumperWritesGFMHeader(self):
+		tree = self._parser('pandoc').parse('Hello\n')
+		out = ''.join(self._dumper('gfm').dump(tree, file_output=True))
+		self.assertIn('Format: markdown gfm 0.31.2\n', out)
+
+	def testDumperWritesOriginalHeader(self):
+		tree = self._parser('pandoc').parse('Hello\n')
+		out = ''.join(self._dumper('original').dump(tree, file_output=True))
+		self.assertIn('Format: markdown 1.0\n', out)
+
+	# ---- Dumper: lossy fallbacks ----
+
+	def testGFMDumperSubscriptFallback(self):
+		tree = self._parser('pandoc').parse('~sub~\n')
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger') as mock_log:
+			out = ''.join(self._dumper('gfm').dump(tree))
+		self.assertIn('sub', out)
+		self.assertNotIn('~sub~', out)
+		self.assertTrue(mock_log.warning.called)
+
+	def testGFMDumperMarkFallback(self):
+		tree = self._parser('pandoc').parse('__marked__\n')
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger') as mock_log:
+			out = ''.join(self._dumper('gfm').dump(tree))
+		self.assertIn('marked', out)
+		self.assertNotIn('__marked__', out)
+		self.assertTrue(mock_log.warning.called)
+
+	def testOriginalDumperStrikethroughFallback(self):
+		tree = self._parser('pandoc').parse('~~strike~~\n')
+		from unittest.mock import patch
+		with patch('zim.formats.markdown.logger') as mock_log:
+			out = ''.join(self._dumper('original').dump(tree))
+		self.assertIn('strike', out)
+		self.assertNotIn('~~', out)
+		self.assertTrue(mock_log.warning.called)
+
+	def testOriginalDumperIndentedCode(self):
+		tree = self._parser('pandoc').parse('```\ncode\n```\n')
+		out = ''.join(self._dumper('original').dump(tree))
+		self.assertIn('    code', out)
+		self.assertNotIn('```', out)
+
+	def testGFMDumperNoPandocImageDimensions(self):
+		from zim.formats import ParseTreeBuilder, IMAGE
+		builder = ParseTreeBuilder()
+		builder.start('zim-tree')
+		builder.append(IMAGE, {'src': 'img.png', 'width': '500', 'height': '300'})
+		builder.end('zim-tree')
+		tree = builder.get_parsetree()
+		out_pandoc = ''.join(self._dumper('pandoc').dump(tree))
+		out_gfm    = ''.join(self._dumper('gfm').dump(tree))
+		self.assertIn('width=500px', out_pandoc)
+		self.assertNotIn('{', out_gfm)
+
+	# ---- Round-trip: parse then dump gives back same flavor header ----
+
+	def testGFMRoundTrip(self):
+		original = (
+			'---\n'
+			'Content-Type: text/markdown\n'
+			'Format: markdown gfm 0.31.2\n'
+			'---\n\n'
+			'Hello **world** ~~strike~~\n'
+		)
+		p = self._parser('gfm')
+		tree = p.parse(original, file_input=True)
+		out = ''.join(self._dumper('gfm').dump(tree, file_output=True))
+		self.assertIn('Format: markdown gfm 0.31.2', out)
+		self.assertIn('~~strike~~', out)
+
+	# ---- Lossiness detection ----
+
+	def testFindLossyElementsGFM(self):
+		from zim.gui.pageformatdialog import find_lossy_elements
+		tree = self._parser('pandoc').parse('~sub~ __mark__ ~~strike~~\n')
+		lossy = find_lossy_elements(tree, 'markdown', 'gfm')
+		self.assertIn('sub', lossy)
+		self.assertIn('mark', lossy)
+		self.assertNotIn('strike', lossy)  # GFM supports strikethrough
+
+	def testFindLossyElementsOriginal(self):
+		from zim.gui.pageformatdialog import find_lossy_elements
+		tree = self._parser('pandoc').parse('~~strike~~ @tag\n')
+		lossy = find_lossy_elements(tree, 'markdown', 'original')
+		self.assertIn('strike', lossy)
+		self.assertIn('tag', lossy)
+
+	def testFindLossyElementsPandocNone(self):
+		from zim.gui.pageformatdialog import find_lossy_elements
+		tree = self._parser('pandoc').parse('~sub~ __mark__ ~~strike~~\n')
+		lossy = find_lossy_elements(tree, 'markdown', 'pandoc')
+		self.assertEqual(lossy, set())
+
+	def testFindLossyElementsTaskList(self):
+		# Checkbox items must be reported as lossy for flavors with task_lists=False
+		from zim.gui.pageformatdialog import find_lossy_elements
+		tree = self._parser('pandoc').parse('- [ ] unchecked\n- [x] done\n')
+		for flavor in ('php-extra', 'original'):
+			lossy = find_lossy_elements(tree, 'markdown', flavor)
+			self.assertIn('task-list', lossy,
+				'task-list not reported as lossy for flavor %s' % flavor)
+		# Must NOT be reported for flavors that support task lists
+		for flavor in ('pandoc', 'gfm', 'glfm', 'rmarkdown'):
+			lossy = find_lossy_elements(tree, 'markdown', flavor)
+			self.assertNotIn('task-list', lossy,
+				'task-list falsely reported as lossy for flavor %s' % flavor)
+
+	def testFindLossyElementsCodeLang(self):
+		# Fenced code language annotations are lost in Original (uses indented code)
+		from zim.gui.pageformatdialog import find_lossy_elements
+		tree = self._parser('pandoc').parse('```python\ncode\n```\n')
+		lossy_orig = find_lossy_elements(tree, 'markdown', 'original')
+		self.assertIn('code-lang', lossy_orig)
+		# Other flavors that support fenced code must NOT report this
+		for flavor in ('pandoc', 'gfm', 'glfm', 'php-extra', 'rmarkdown'):
+			lossy = find_lossy_elements(tree, 'markdown', flavor)
+			self.assertNotIn('code-lang', lossy,
+				'code-lang falsely reported as lossy for flavor %s' % flavor)
+		# Plain code block with no lang attribute: not lossy even for original
+		tree_nolang = self._parser('pandoc').parse('```\ncode\n```\n')
+		lossy_nolang = find_lossy_elements(tree_nolang, 'markdown', 'original')
+		self.assertNotIn('code-lang', lossy_nolang)
+
+	def testGFMLossyRoundtrip(self):
+		'''Page with all GFM-lossy elements converts to zim-wiki and back stably.
+
+		GFM does not support underline/mark (__), subscript (~), superscript (^),
+		named anchors ({#}), or zim tags (@).  After the first lossy conversion
+		these elements become plain text; the second pass must produce identical
+		output (no further degradation).  Also verifies that the YAML front-matter
+		blank-line fix does not introduce extra blank lines on re-serialisation.
+		'''
+		from zim.formats import get_format_module
+		from unittest.mock import patch
+
+		wiki = get_format_module('wiki')
+
+		# A pandoc source page that contains every GFM-lossy element plus
+		# elements that GFM does support (bold, strike, table).
+		pandoc_src = (
+			'# Heading\n\n'
+			'**bold** *italic* ~~strike~~\n\n'          # non-lossy in GFM
+			'__mark__ ~sub~ ^sup^\n\n'                  # GFM-lossy: mark, subscript, superscript
+			'{#anchor} @tag\n\n'                        # GFM-lossy: anchor, zim tag
+			'| Col 1 | Col 2 |\n| --- | --- |\n| A | B |\n'  # table: OK in GFM
+		)
+
+		pandoc_tree = self._parser('pandoc').parse(pandoc_src)
+
+		gfm_dumper = self._dumper('gfm')
+		gfm_parser = self._parser('gfm')
+		wiki_dumper = wiki.Dumper()
+		wiki_parser = wiki.Parser()
+
+		def one_roundtrip(tree):
+			# tree → GFM → parse → zim-wiki → parse
+			with patch('zim.formats.markdown.logger'):
+				gfm_text = ''.join(gfm_dumper.dump(tree, file_output=True))
+				gfm_tree = gfm_parser.parse(gfm_text, file_input=True)
+			wiki_text = ''.join(wiki_dumper.dump(gfm_tree))
+			return wiki_parser.parse(wiki_text), wiki_text
+
+		tree1, wiki1 = one_roundtrip(pandoc_tree)
+		tree2, wiki2 = one_roundtrip(tree1)
+
+		# After the first lossy conversion the output must be stable
+		self.assertEqual(wiki1, wiki2,
+			'GFM lossy roundtrip is not stable after two passes')
+
+		# Plain text of lost elements must survive (not be deleted)
+		self.assertIn('mark', wiki1)
+		self.assertIn('sub', wiki1)
+		self.assertIn('sup', wiki1)
+		# Markup syntax must NOT leak through as literal text
+		self.assertNotIn('__mark__', wiki1)   # pandoc underline syntax
+		self.assertNotIn('~sub~', wiki1)      # pandoc subscript syntax
+		self.assertNotIn('^sup^', wiki1)      # pandoc superscript syntax
+
+
 class TestParseHeaderLines(tests.TestCase):
 
 	def runTest(self):

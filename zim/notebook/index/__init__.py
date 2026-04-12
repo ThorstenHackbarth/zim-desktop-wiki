@@ -136,6 +136,16 @@ class Index(SignalEmitter):
 			self._db_init()
 
 	def _db_init(self):
+		# Drop virtual tables first; SQLite cascades to their shadow tables.
+		# Shadow tables (e.g. pages_fts_data) cannot be dropped directly.
+		vtables = [r[0] for r in self._db.execute(
+			"SELECT name FROM sqlite_master "
+			"WHERE type='table' AND sql LIKE 'CREATE VIRTUAL TABLE%' "
+			"AND name NOT LIKE 'sqlite%'"
+		)]
+		for table in vtables:
+			self._db.execute('DROP TABLE IF EXISTS %s' % table)
+
 		tables = [r[0] for r in self._db.execute(
 			'SELECT name FROM sqlite_master '
 			'WHERE type=? and name NOT LIKE ?',

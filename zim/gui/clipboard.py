@@ -489,13 +489,18 @@ class ParseTreeData(ClipboardData):
 			html = ''.join(dumper.dump(self.parsetree))
 			return wrap_html(html, targetname)
 		elif targetid == TEXT_TARGET_ID:
-			if self.format in ('wiki', 'plain'):
-				dumper = get_format(self.format).Dumper()
+			fmt = self.format
+			flavor = None
+			if ':' in fmt:
+				fmt, flavor = fmt.split(':', 1)
+			if fmt in ('wiki', 'plain'):
+				dumper = get_format(fmt).Dumper()
 			else:
-				# markdown included here - use export version
-				dumper = get_format(self.format).Dumper(
-					linker=StaticExportLinker(self.notebook, source=self.path))
-
+				linker = StaticExportLinker(self.notebook, source=self.path)
+				if flavor:
+					dumper = get_format(fmt).Dumper(flavor=flavor, linker=linker)
+				else:
+					dumper = get_format(fmt).Dumper(linker=linker)
 			return ''.join(dumper.dump(self.parsetree))
 		else:
 			raise ValueError('Unknown target id %i' % targetid)

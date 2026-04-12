@@ -8,7 +8,7 @@ import sys
 from .page import Path
 
 from zim.newfs import File, Folder, _EOL, SEP, FileNotFoundError
-from zim.formats import get_format
+from zim.formats import get_format, get_format_module, FormatConfig
 
 import zim.parse.links # we use "error=urlencode"
 
@@ -70,44 +70,83 @@ class FilesLayout(NotebookLayout):
 	like-named file.
 	'''
 
-	def __init__(self, folder, endofline=_EOL, default_format='wiki', default_extension='.txt'):
+	def __init__(self, folder, endofline=_EOL, default_format='wiki', default_extension='.txt', markdown_flavor=None, use_all_formats=False):
 		'''Constructor
 		@param folder: a L{Folder} object
 		@param endofline: either "dos" or "unix", default per OS
+		@param markdown_flavor: optional flavor for markdown notebooks
+		  (one of FLAVOR_PANDOC, FLAVOR_GFM, FLAVOR_ORIGINAL)
+		@param use_all_formats: when C{True} all supported text file
+		  extensions (.txt, .md) are treated as page sources regardless
+		  of the default extension
 		'''
 		assert isinstance(folder, Folder)
 		self.root = folder
 		self.endofline = endofline
+		self._markdown_flavor = markdown_flavor
+		self._use_all_formats = use_all_formats
 		self.update_format(default_format, default_extension)
-	
+
 	def update_format(self, default_format, default_extension):
 		if not default_extension.startswith('.'):
 			default_extension = '.' + default_extension
 
 		self.default_extension = default_extension
-		self.default_format = get_format(default_format)
+
+		raw_module = get_format_module(default_format)
+		if default_format == 'markdown' and self._markdown_flavor:
+			from zim.formats.markdown import FLAVOR_CONFIGS
+			if self._markdown_flavor in FLAVOR_CONFIGS:
+				self.default_format = FormatConfig(raw_module, default_flavor=self._markdown_flavor)
+				return
+		self.default_format = raw_module
+
+	def update_use_all_formats(self, value):
+		'''Update the use_all_formats flag.
+
+		Called when the notebook use_all_formats property changes.
+		'''
+		self._use_all_formats = value
+
+	def update_markdown_flavor(self, flavor):
+		'''Update the markdown flavor without changing the format or extension.
+
+		Called when the notebook markdown_flavor property changes.
+		'''
+		self._markdown_flavor = flavor
+		if self.default_extension == '.md':
+			self.update_format('markdown', self.default_extension)
+
+	def _check_source_file_for_ext(self, file, ext):
+		'''Check if file is a valid page source for a given extension.
+		Returns True/False, or None if the extension does not match.
+		'''
+		if not file.path.endswith(ext):
+			return None
+		name = file.basename
+		pname = decode_filename(name)
+		if encode_filename(pname) != name: # reject e.g. whitespace in file name
+			return False
+		if ext == '.txt':
+			try:
+				line = file.readline(size=50)
+				return line.strip() == 'Content-Type: text/x-zim-wiki'
+			except FileNotFoundError:
+				return True # give file the benefit of the doubt
+		else: # .md or other
+			return True
 
 	def is_source_file(self, file):
-		if file.path.endswith(self.default_extension):
-			name = file.basename
-			pname = decode_filename(name)
-			if encode_filename(pname) != name: # will reject e.g. whitespace in file name
-				return False
-
-			if self.default_extension == '.txt':
-				try:
-					line = file.readline(size=50) # max size to allow for some trailing whitespace and end-of-line
-					return line.strip() == 'Content-Type: text/x-zim-wiki'
-				except FileNotFoundError:
-					return True # give file the benefit of the doubt, could be a deleted source file
-			elif self.default_extension == '.md':
-				# Markdown files are always accepted as source files
-				# Optionally they may contain YAML front matter with Content-Type
-				return True
-			else:
-				return True
-		else:
-			return False
+		result = self._check_source_file_for_ext(file, self.default_extension)
+		if result is not None:
+			return result
+		if self._use_all_formats:
+			for ext in ('.txt', '.md'):
+				if ext != self.default_extension:
+					result = self._check_source_file_for_ext(file, ext)
+					if result is not None:
+						return result
+		return False
 
 	def map_page(self, pagename):
 		'''Map a pagename to a (default) file
@@ -135,8 +174,10 @@ class FilesLayout(NotebookLayout):
 
 		path = file.relpath(self.root)
 		if type == FILE_TYPE_PAGE_SOURCE:
-			if path.endswith(self.default_extension):
-				path = path[:-len(self.default_extension)]
+			for ext in (self.default_extension, '.txt', '.md'):
+				if path.endswith(ext):
+					path = path[:-len(ext)]
+					break
 		else: # FILE_TYPE_ATTACHMENT
 			if SEP in path:
 				path, x = path.rsplit(SEP, 1)
@@ -167,8 +208,17 @@ class FilesLayout(NotebookLayout):
 	def get_format(self, file):
 		if file.path.endswith(self.default_extension):
 			return self.default_format
-		else:
-			raise AssertionError('Unknown file type for page: %s' % file.basename)
+		elif self._use_all_formats:
+			if file.path.endswith('.txt'):
+				return get_format_module('wiki')
+			elif file.path.endswith('.md'):
+				raw_module = get_format_module('markdown')
+				if self._markdown_flavor:
+					from zim.formats.markdown import FLAVOR_CONFIGS
+					if self._markdown_flavor in FLAVOR_CONFIGS:
+						return FormatConfig(raw_module, default_flavor=self._markdown_flavor)
+				return raw_module
+		raise AssertionError('Unknown file type for page: %s' % file.basename)
 
 	def index_list_children(self, pagename):
 		# Convenience method - remove if no longer used by the index

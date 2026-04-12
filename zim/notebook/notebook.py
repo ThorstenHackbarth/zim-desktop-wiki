@@ -61,6 +61,8 @@ class NotebookConfig(INIConfigFile):
 			('endofline', Choice(endofline, {'dos', 'unix'})),
 			('disable_trash', Boolean(False)),
 			('default_file_format', Choice('zim-wiki', {'zim-wiki', 'markdown'})),
+			('markdown_flavor', Choice('gfm', {'pandoc', 'gfm', 'glfm', 'php-extra', 'rmarkdown', 'original'})),
+			('use_all_formats', Boolean(False)),
 			('default_page_template', String('Default')),
 			('notebook_layout', String('files')),
 		))
@@ -253,11 +255,15 @@ class Notebook(ConnectorMixin, SignalEmitter):
 			file_format = config['Notebook']['default_file_format']
 			from zim.formats import get_format_extension
 			file_extension=get_format_extension(file_format)
+			markdown_flavor = config['Notebook'].get('markdown_flavor', 'pandoc')
+			use_all_formats = config['Notebook'].get('use_all_formats', False)
 			layout = FilesLayout(
 				folder,
 				config['Notebook']['endofline'],
 				file_format,
-				file_extension
+				file_extension,
+				markdown_flavor=markdown_flavor,
+				use_all_formats=use_all_formats,
 			)
 		else:
 			raise ValueError('Unkonwn notebook layout: %s' % config['Notebook']['notebook_layout'])
@@ -367,7 +373,11 @@ class Notebook(ConnectorMixin, SignalEmitter):
 		file_format = properties['default_file_format']
 		from zim.formats import get_format_extension
 		file_extension = get_format_extension(file_format)
+		markdown_flavor = properties.get('markdown_flavor', 'pandoc')
 
+		use_all_formats = properties.get('use_all_formats', False)
+		self.layout.update_use_all_formats(use_all_formats)
+		self.layout.update_markdown_flavor(markdown_flavor)
 		self.layout.update_format(file_format, file_extension)
 		self.interwiki = create_valid_interwiki_key(properties['interwiki'] or self.name)
 

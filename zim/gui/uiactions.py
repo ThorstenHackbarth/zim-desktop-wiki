@@ -15,6 +15,7 @@ from zim.actions import action
 
 from zim.parse.encode import url_encode, URL_ENCODE_DATA
 from zim.templates import list_templates, get_template
+from zim.templates.expression import ExpressionFunction
 
 from zim.config import data_file, ConfigManager
 from zim.notebook import Path, PageExistsError, NotebookOperation, PageNotAvailableError
@@ -71,10 +72,17 @@ class UIActions(object):
 		action = self.actiongroup.get_action('show_debug_log')
 		action.set_sensitive(zim.debug_log_file is not None)
 
+		self._update_convert_page_sensitivity()
+
+	def _update_convert_page_sensitivity(self):
+		use_all = bool(self.notebook.config['Notebook'].get('use_all_formats', False))
+		self.actiongroup.get_action('show_page_format_dialog').set_sensitive(use_all)
+
 	def on_notebook_properties_changed(self, propeties):
 		group = get_gtk_actiongroup(self)
 		action = self.actiongroup.get_action('open_document_root')
 		action.set_sensitive(self.notebook.document_root is not None)
+		self._update_convert_page_sensitivity()
 
 	def populate_menu_with_actions(self, scope, menu):
 		assert scope in (PAGE_EDIT_ACTIONS, PAGE_ROOT_ACTIONS, PAGE_ACCESS_ACTIONS)
@@ -214,6 +222,19 @@ class UIActions(object):
 				).run():
 					return DeletePageDialog(self.widget, self.notebook, path).run()
 
+
+	@action(_('Convert Page _Format...')) # T: Menu item
+	def show_page_format_dialog(self):
+		'''Menu action to open the per-page format conversion dialog.
+		Only active when "Use all supported formats" is enabled in notebook properties.'''
+		from zim.gui.pageformatdialog import PageFormatDialog
+		from zim.gui.widgets import get_window
+		converted = PageFormatDialog(self.widget, self.notebook, self.page).run()
+		if converted:
+			window = get_window(self.widget)
+			if window and hasattr(window, 'pageview'):
+				window.pageview.set_page(self.page)
+				window.emit('page-changed', self.page)
 
 	@action(_('Proper_ties')) # T: Menu item
 	def show_properties(self):
@@ -503,8 +524,9 @@ class NewPageDialog(Dialog):
 			if page.exists():
 				raise PageExistsError(path)
 
-			template = get_template('wiki', self.form['template']) # TODO make page template format flexible
-			tree = self.notebook.eval_new_page_template(page, template)
+			template = get_template('wiki', self.form['template'])
+			tree = self.notebook.eval_new_page_template(page, template,
+				{'place_cursor': ExpressionFunction(lambda: '')})
 			page.set_parsetree(tree)
 			self.notebook.store_page(page)
 

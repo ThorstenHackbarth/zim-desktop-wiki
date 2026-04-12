@@ -224,13 +224,35 @@ def convert_list_iter_letter_to_number(listiter):
 			return None
 
 
+def encode_xml(text):
+	'''Encode text such that it can be used in xml
+	@param text: label text as string
+	@returns: encoded text
+	'''
+	return text.replace('&', '&amp;').replace('>', '&gt;').replace('<', '&lt;').replace('"', '&quot;').replace("'", '&apos;')
+
+
+_MARKDOWN_EXPORT_FLAVOR_MAP = {
+	'Markdown (pandoc)':    'pandoc',
+	'Markdown (gfm)':       'gfm',
+	'Markdown (glfm)':      'glfm',
+	'Markdown (php-extra)': 'php-extra',
+	'Markdown (rmarkdown)': 'rmarkdown',
+	'Markdown (original)':  'original',
+}
+
 def list_formats(type):
 	if type == EXPORT_FORMAT:
-		return ['HTML', 'LaTeX', 'Markdown (pandoc)', 'RST (sphinx)']
+		return ['HTML', 'LaTeX'] + list(_MARKDOWN_EXPORT_FLAVOR_MAP) + ['RST (sphinx)']
 	elif type == TEXT_FORMAT:
-		return ['Text', 'Wiki', 'Markdown (pandoc)', 'RST (sphinx)']
+		return ['Text', 'Wiki'] + list(_MARKDOWN_EXPORT_FLAVOR_MAP) + ['RST (sphinx)']
 	else:
 		assert False, 'TODO'
+
+
+def get_markdown_export_flavor(name):
+	'''Return the markdown flavor string for an export display name, or C{None} if not a markdown variant.'''
+	return _MARKDOWN_EXPORT_FLAVOR_MAP.get(name)
 
 
 def canonical_name(name):
@@ -250,6 +272,46 @@ _aliases = {
 	'zim-wiki': 'wiki',
 	'markdown-native': 'markdown',
 }
+
+class FormatConfig(object):
+	'''Wraps a format module with per-notebook configuration options.
+
+	Supports the same attribute access as the format module itself, but
+	overrides C{Parser} and C{Dumper} to forward extra kwargs (e.g.
+	C{default_flavor}) to their constructors.  Used so that
+	L{FilesLayout} can store format-specific options alongside the module
+	reference without touching C{Page} or C{Notebook}.
+
+	Example usage::
+
+	    fc = FormatConfig(get_format_module('markdown'), default_flavor='gfm')
+	    parser = fc.Parser()   # → markdown.Parser(default_flavor='gfm')
+	    dumper = fc.Dumper()   # → markdown.Dumper(flavor='gfm')
+	'''
+
+	def __init__(self, module, **options):
+		self._module = module
+		self._options = options  # e.g. {'default_flavor': 'gfm'}
+
+	@property
+	def Parser(self):
+		klass = zim.plugins.lookup_subclass(self._module, ParserClass)
+		opts = self._options
+		return lambda: klass(**opts)
+
+	@property
+	def Dumper(self):
+		klass = zim.plugins.lookup_subclass(self._module, DumperClass)
+		# Dumper uses 'flavor' kwarg while Parser uses 'default_flavor'
+		opts = {
+			('flavor' if k == 'default_flavor' else k): v
+			for k, v in self._options.items()
+		}
+		return lambda: klass(**opts)
+
+	def __getattr__(self, name):
+		return getattr(self._module, name)
+
 
 def get_format(name):
 	'''Returns the module object for a specific format.'''

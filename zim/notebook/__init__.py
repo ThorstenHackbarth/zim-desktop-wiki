@@ -190,18 +190,29 @@ class ApplicationMountPointHandler(object):
 			return path.exists()
 
 
-def init_notebook(dir, name=None, page_template='Default', file_format='zim-wiki'):
+def init_notebook(dir, name=None, page_template='Default', file_format='zim-wiki', markdown_flavor='gfm', use_all_formats=False):
 	'''Initialize a new notebook in a directory
 
 	@param dir: a L{Folder} for the notebook
 	@param name: notebook name, defaults to folder basename
 	@param page_template: name of the page template to use
 	@param file_format: storage format, either C{'zim-wiki'} or C{'markdown'}
+	@param markdown_flavor: markdown flavor when file_format is 'markdown',
+	one of C{'pandoc'}, C{'gfm'}, C{'original'}
+	@param use_all_formats: if C{True}, open all supported text files as wiki pages
 	'''
 	from .notebook import NotebookConfig
 	dir.touch()
 	config = NotebookConfig(dir.file('notebook.zim'))
 	config['Notebook']['name'] = name or dir.basename
 	config['Notebook']['default_file_format'] = file_format
-	config['Notebook']['default_page_template'] = valid_template_name('wiki', page_template) # TODO: make template format flexible
+
+	if file_format == 'markdown':
+		config['Notebook']['markdown_flavor'] = markdown_flavor
+	if use_all_formats:
+		config['Notebook']['use_all_formats'] = True
+	# Use 'wiki' as template format name for both formats
+	template_format = 'wiki' if file_format == 'zim-wiki' else 'wiki'
+	config['Notebook']['default_page_template'] = valid_template_name(template_format, page_template)
+
 	config.write()

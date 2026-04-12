@@ -62,7 +62,13 @@ def prompt_notebook():
 		fields = _run_dialog_with_mainloop(AddNotebookDialog(None))
 		if fields:
 			dir = LocalFolder(fields['folder'])
-			init_notebook(dir, name=fields['name'], page_template=fields['template'])
+			init_notebook(
+				dir, name=fields['name'],
+				page_template=fields['template'],
+				file_format=fields.get('file_format', 'zim-wiki'),
+				markdown_flavor=fields.get('markdown_flavor', 'gfm'),
+				use_all_formats=fields.get('use_all_formats', False),
+			)
 			list.append(NotebookInfo(dir.uri, name=fields['name']))
 			list.write()
 			return NotebookInfo(dir.uri, name=fields['name'])
@@ -384,6 +390,8 @@ class NotebookDialog(Dialog):
 				dir, name=fields['name'],
 				page_template=fields['template'],
 				file_format=fields.get('file_format', 'zim-wiki'),
+				markdown_flavor=fields.get('markdown_flavor', 'gfm'),
+				use_all_formats=fields.get('use_all_formats', False),
 			)
 			model = self.treeview.get_model()
 			model.append_notebook(dir.uri, name=fields['name'])
@@ -433,19 +441,19 @@ class AddNotebookDialog(Dialog):
 
 		templates = [t[0] for t in list_templates('wiki')] # TODO make new page template flexible
 
-		format_options = ['Zim Wiki (.txt)', 'Markdown (.md)']
-
 		self.add_form((
 			('name', 'string', _('Name')), # T: input field in 'Add Notebook' dialog
 			('folder', 'dir', _('Folder')), # T: input field in 'Add Notebook' dialog
-			('format', 'choice', _('Default file format') + ' ('+_('Experimental')+')', format_options), # T: choice field in 'Add Notebook' dialog
 			('template', 'choice', _('Page template'), templates),  # T: choice field in 'Add Notebook' dialog
 		), {
 			'name': name,
 			'folder': folder,
-			'format': format_options[0],
 			'template': 'Default',
 		})
+
+		from zim.gui.propertiesdialog import NotebookFormatWidget
+		self._format_widget = NotebookFormatWidget()
+		self.vbox.pack_start(self._format_widget, False, False, 0)
 
 		self.add_help_text(_('''\
 To create a new notebook you need to select an empty folder.
@@ -506,17 +514,14 @@ Of course you can also select an existing zim notebook folder.
 		name = self.form['name']
 		folder = self.form['folder']
 		if name and folder:
-			# Determine file format from format choice
-			format_choice = self.form['format']
-			if 'Markdown' in format_choice:
-				file_format = 'markdown'
-			else:
-				file_format = 'zim-wiki'
+			fmt = self._format_widget.get_values()
 			self.result = {
 				'name': name,
 				'folder': folder,
 				'template': self.form['template'],
-				'file_format': file_format,
+				'file_format': fmt['default_file_format'],
+				'markdown_flavor': fmt['markdown_flavor'],
+				'use_all_formats': fmt['use_all_formats'],
 			}
 			return True
 		else:

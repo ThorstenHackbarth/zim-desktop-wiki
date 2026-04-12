@@ -91,8 +91,11 @@ class ExportDialog(Assistant):
 			if self.uistate[k] and not self.uistate[k].isspace():
 				options[k] = self.uistate[k]
 
+		flavor = zim.formats.get_markdown_export_flavor(options['format'])
 		options['format'] = \
 			zim.formats.canonical_name(options['format'])
+		if flavor:
+			options['flavor'] = flavor
 
 		if options['template'] == '__file__':
 			options['template'] = self.uistate['template_file']

@@ -9,6 +9,7 @@ from gi.repository import Pango
 from .generictreemodel import GenericTreeModel
 
 import logging
+import datetime
 
 from functools import partial
 
@@ -85,9 +86,9 @@ class PageIndexNotebookViewExtension(NotebookViewExtension):
 		self.treeview.set_model(model)
 		self.widget = PageIndexWidget(self.treeview)
 
-		# Connect to ui signals
-		#window.connect('start-index-update', lambda o: self.disconnect_model())
-		#window.connect('end-index-update', lambda o: self.reload_model())
+		# Reload the model whenever the index is flushed and gets a new update-iter
+		# (flush emits 'new-update-iter' via _db_init → _update_iter_init)
+		self.connectto(index, 'new-update-iter', self.on_new_update_iter)
 
 		self.on_page_changed(pageview, pageview.page)
 		self.connectto(pageview, 'page-changed')
@@ -110,6 +111,13 @@ class PageIndexNotebookViewExtension(NotebookViewExtension):
 
 	def on_page_changed(self, pageview, page):
 		treepath = self.treeview.set_current_page(page, vivificate=True)
+
+	def on_new_update_iter(self, index, update_iter):
+		'''Called when the index is flushed and a new update-iter is created.
+		Tears down the stale model and builds a fresh one so the treeview
+		does not show garbage after an index flush/rebuild.
+		'''
+		self.reload_model()
 
 	def disconnect_model(self):
 		'''Stop the widget from listening to the index. Used e.g. to
@@ -216,12 +224,17 @@ class PageTreeStoreBase(GenericTreeModel, Gtk.TreeDragSource, Gtk.TreeDragDest):
 		self._flush_scheduled = False
 
 	def flush_cache(self):
-		# Drop references and free memory
-		#~ print('!! Freeing %i refs' % len(self._cache))
-		#~ print('=' * 60)
+		# Swap in a fresh cache and invalidate all stamps so GTK considers
+		# existing iters stale.  Keep a reference to the old cache alive until
+		# the *next* idle cycle: if a draw pass is currently in progress it may
+		# still call do_iter_next() with old iters whose user_data points into
+		# the cache.  Without this deferred release Python could free those
+		# objects immediately, leaving user_data as a dangling (NULL) pointer
+		# and triggering "PyObject is NULL" / GTK-CRITICAL disparity errors.
 		self.invalidate_iters()
-		self.cache.clear()
+		old_cache, self.cache = self.cache, {}
 		self._flush_scheduled = False
+		GObject.idle_add(lambda c=old_cache: False)  # keep alive; released next idle
 		return False # In case we are called from idle signal
 
 	def _emit_page_changes(self, path):
@@ -443,9 +456,93 @@ class PageTreeView(BrowserTreeView):
 
 	def set_use_tooltip(self, use_tooltip):
 		if use_tooltip:
-			self.set_tooltip_column(TIP_COL)
+			self.set_has_tooltip(True)
+			if not hasattr(self, '_tooltip_handler_id') or self._tooltip_handler_id is None:
+				self._tooltip_handler_id = self.connect('query-tooltip', self._on_query_tooltip)
 		else:
-			self.set_tooltip_column(-1)
+			self.set_has_tooltip(False)
+			if hasattr(self, '_tooltip_handler_id') and self._tooltip_handler_id is not None:
+				self.disconnect(self._tooltip_handler_id)
+				self._tooltip_handler_id = None
+
+	_FLAVOR_LABELS = {
+		'pandoc':    'Pandoc',
+		'gfm':       'GFM',
+		'glfm':      'GLFM',
+		'php-extra': 'PHP Extra',
+		'rmarkdown': 'R Markdown',
+		'original':  'Original',
+	}
+
+	def _on_query_tooltip(self, treeview, x, y, keyboard_mode, tooltip):
+		if keyboard_mode:
+			treepath, _col = treeview.get_cursor()
+			if treepath is None:
+				return False
+		else:
+			bx, by = treeview.convert_widget_to_bin_window_coords(x, y)
+			result = treeview.get_path_at_pos(bx, by)
+			if result is None:
+				return False
+			treepath = result[0]
+
+		try:
+			model = treeview.get_model()
+			treeiter = model.get_iter(treepath)
+			page = model.get_value(treeiter, PATH_COL)
+			if page is None:
+				return False
+
+			lines = []
+
+			# Relative filename (and format derived from extension)
+			layout = self.notebook.layout
+			file, _folder = layout.map_page(page)
+			rel = file.relpath(layout.root)
+			# With use_all_formats the actual file may use a different extension
+			if not file.exists() and getattr(layout, '_use_all_formats', False):
+				base = rel[:-len(layout.default_extension)]
+				for try_ext in ('.txt', '.md'):
+					if try_ext != layout.default_extension:
+						alt = layout.root.file(base + try_ext)
+						if alt.exists():
+							file = alt
+							rel = base + try_ext
+							break
+			lines.append(rel)
+
+			# Format
+			if rel.endswith('.md'):
+				fmt_label = _('Markdown')  # T: page format label in tooltip
+				flavor = getattr(layout, '_markdown_flavor', None)
+				if flavor:
+					fmt_label += ' (%s)' % self._FLAVOR_LABELS.get(flavor, flavor)
+			else:
+				fmt_label = _('Zim Wiki')  # T: page format label in tooltip
+			lines.append(_('Format') + ': ' + fmt_label)  # T: tooltip field label
+
+			# Storage status
+			if not page.exists():
+				status = _('Placeholder')  # T: page storage status in tooltip
+			elif page.hascontent:
+				status = _('Stored')  # T: page storage status in tooltip
+			else:
+				status = _('Section only')  # T: page storage status in tooltip
+			lines.append(_('Status') + ': ' + status)  # T: tooltip field label
+
+			# Last change
+			if page.mtime:
+				dt = datetime.datetime.fromtimestamp(page.mtime)
+				lines.append(
+					_('Last change') + ': ' + dt.strftime('%Y-%m-%d %H:%M')  # T: tooltip field label
+				)
+
+			tooltip.set_text('\n'.join(lines))
+			treeview.set_tooltip_row(tooltip, treepath)
+			return True
+		except Exception:
+			logger.exception('Error building page index tooltip')
+			return False
 
 	def set_use_ellipsize(self, use_ellipsize):
 		'''Set whether to use ellipsize ("...") for page names that are longer

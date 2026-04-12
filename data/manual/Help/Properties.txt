@@ -21,5 +21,9 @@ When the property **Do not use system trash for this notebook** is enabled, the 
 
 The property **Filename template for pasted images** gives a base name to save image files when images are pasted into a page. This string can contain `strftime` codes for date and time.
 
-The **Default file format** sets the file format used for new pages in the notebook. The default is "zim-wiki" (the native zim wiki format). Selecting "markdown" stores pages as Markdown files (`.md`) with YAML front matter - this feature is currently experimental for testing.
+When **Use all supported formats (do not convert pages on format change, opens all supported text files as wiki pages)** is enabled, zim opens any supported text file (zim-wiki or Markdown) as a wiki page regardless of the notebook's default format, and does not offer to convert pages when the format setting changes. The "Storage format" label changes to "Default storage format" to reflect that new pages use the configured default while existing pages keep their own format.
+
+The **Storage format** controls the file format used to store pages in the notebook. The default is "zim-wiki" (the native zim wiki format). Selecting "markdown" stores pages as Markdown files (`.md`) with YAML front matter.
+
+The **Markdown flavor** selects which Markdown dialect is used when the storage format is set to "markdown". The options are "pandoc" (default, supports the most extensions), "gfm" (GitHub Flavored Markdown), and "original" (the original Daring Fireball specification). This setting is only active when the storage format is "markdown".
 

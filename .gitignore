@@ -101,6 +101,12 @@ ENV/
 # debian pybuild
 debian/python-module-stampdir/
 
+# Claude Code
+.claude/
+
+# Markdown spec reference docs (not part of the project)
+/doc/
+
 # PyCharm
 .idea
 

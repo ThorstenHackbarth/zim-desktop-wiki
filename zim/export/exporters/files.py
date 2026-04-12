@@ -25,16 +25,22 @@ from zim.newfs import FileNotFoundError, LocalFolder
 class FilesExporterBase(Exporter):
 	'''Base class for exporters that export to files'''
 
-	def __init__(self, layout, template, format, document_root_url=None):
+	def __init__(self, layout, template, format, document_root_url=None, flavor=None):
 		'''Constructor
 		@param layout: a L{ExportLayout} to map pages to files
 		@param template: a L{Template} object
 		@param format: the format for the file content
 		@param document_root_url: optional URL for the document root
+		@param flavor: optional markdown flavor string (e.g. C{'gfm'})
 		'''
 		self.layout = layout
 		self.template = template
-		self.format = get_format(format) # XXX
+		fmt_module = get_format(format) # XXX
+		if flavor:
+			from zim.formats import FormatConfig
+			self.format = FormatConfig(fmt_module, default_flavor=flavor)
+		else:
+			self.format = fmt_module
 		self.document_root_url = document_root_url
 
 	def export_attachments_iter(self, notebook, page):
@@ -76,15 +82,16 @@ class FilesExporterBase(Exporter):
 class MultiFileExporter(FilesExporterBase):
 	'''Exporter that exports each page to a single file'''
 
-	def __init__(self, layout, template, format, index_page=None, document_root_url=None):
+	def __init__(self, layout, template, format, index_page=None, document_root_url=None, flavor=None):
 		'''Constructor
 		@param layout: a L{ExportLayout} to map pages to files
 		@param template: a L{Template} object
 		@param format: the format for the file content
 		@param index_page: a page to output the index or C{None}
 		@param document_root_url: optional URL for the document root
+		@param flavor: optional markdown flavor string (e.g. C{'gfm'})
 		'''
-		FilesExporterBase.__init__(self, layout, template, format, document_root_url)
+		FilesExporterBase.__init__(self, layout, template, format, document_root_url, flavor)
 		if index_page:
 			if isinstance(index_page, str):
 				self.index_page = Path(Path.makeValidPageName(index_page))

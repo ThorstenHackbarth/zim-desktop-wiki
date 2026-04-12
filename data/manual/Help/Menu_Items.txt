@@ -27,6 +27,9 @@ Save the current page. This function is included to not scare users that do not 
 **Save A Copy**
 This function is intended for saving a copy of the current page outside of the notebook as a text file using the wiki syntax of the notebook. These files can later be imported again with the "Import Page" function.
 
+**Convert Page Format**
+Convert the current page from its current file format to a different format or markdown flavor. Only available when "Use all supported formats" is enabled in [[Properties|notebook properties]].
+
 **Save Version <Shift><Ctrl><S>**
 Prompt for entering a comment and save a new version. This is a snapshot of the notebook that can later be restored or used to compare changes. If no version control is enabled yet for this notebook this function will ask you to enable version control.
 

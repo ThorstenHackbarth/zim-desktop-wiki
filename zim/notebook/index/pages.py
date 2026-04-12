@@ -121,8 +121,27 @@ class PagesIndexer(IndexerBase):
 			newrow = self._select(pagename)
 			self.emit('page-row-changed', newrow, row)
 		else:
-			# TODO: Flag conflict
-			raise NotImplementedError
+			# Two source files map to the same page name — resolve which wins
+			existing = self.db.execute(
+				'SELECT path FROM files WHERE id=?', (row['source_file'],)
+			).fetchone()
+			if existing:
+				existing_file = self.layout.root.file(existing['path'])
+				new_file = self.layout.root.file(filerow['path'])
+				winner = self.layout.resolve_conflict(existing_file, new_file)
+				if winner.path == new_file.path:
+					# New file takes precedence — update source_file reference
+					self.db.execute(
+						'UPDATE pages SET source_file=?, mtime=? WHERE name=?',
+						(filerow['id'], None, pagename.name)
+					)
+					newrow = self._select(pagename)
+					self.emit('page-row-changed', newrow, row)
+				else:
+					logger.debug('Conflict: %s ignored, page sourced from %s',
+						filerow['path'], existing['path'])
+			else:
+				logger.warning('Conflict: source file id=%d not found in files table', row['source_file'])
 
 	def on_file_row_changed(self, o, filerow):
 		pagename, file_type = self.layout.map_filepath(filerow['path'])

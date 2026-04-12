@@ -3127,7 +3127,9 @@ class TextBuffer(TextBufferFindMixin, Gtk.TextBuffer):
 			if tags:
 				text_format = 'verbatim-' + tags[0].zim_tag
 			else:
-				text_format = self.notebook.layout.default_format.info['name']
+				#text_format = self.notebook.layout.default_format.info['name']
+				text_format = self.page.format.info['name']  # respect page's native format (e.g. 'markdown')
+
 		parsetree = clipboard.get_parsetree(self.notebook, self.page, text_format)
 		if not parsetree:
 			return

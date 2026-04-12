@@ -12,6 +12,7 @@
 			<separator/>
 			<menuitem action='save_page'/>
 			<menuitem action='save_copy'/>
+			<menuitem action='show_page_format_dialog'/>
 			<separator/>
 			<menuitem action='show_export'/>
 			<menuitem action='email_page'/>
